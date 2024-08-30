@@ -1,8 +1,13 @@
 use core::panic;
+use std::vec;
+use ark_ec::Group;
 use polynomial::Polynomial;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
+use ark_bn254::{G1Projective as G, Fr as ScalarField};
+use ark_std::{Zero, UniformRand, ops::Mul};
+
 
 fn shield_brack_parser(op: &str) -> (String, String) {
     let op_arr: Vec<char> = op.chars().collect();
@@ -141,6 +146,10 @@ fn compute_op_points(parsed_operations: Vec<[String; 5]>, op_type: i32) -> Vec<V
     let mut current_index: usize = 0;
     let last_index = parsed_operations.len() - 1;
 
+    let mut x = 1;
+    let mut y: i32;
+
+
     for array in &parsed_operations {
         let coeff = if &array[0 + offset] == "" {
             "1"
@@ -148,9 +157,6 @@ fn compute_op_points(parsed_operations: Vec<[String; 5]>, op_type: i32) -> Vec<V
             &array[0 + offset]
         };
         let operand_var: &String;
-
-        let x = 1;
-        let y: i32;
 
         //For output without coeff support
         if op_type == 2 {
@@ -168,20 +174,28 @@ fn compute_op_points(parsed_operations: Vec<[String; 5]>, op_type: i32) -> Vec<V
 
             //Push into the vector
             inner_vec.push([x, y]);
+
         } else if prev_var == operand_var {
             let points = [x, y];
             inner_vec.push(points);
-            println!("Inner veec {:?}:", inner_vec);
+
         } else if prev_var != operand_var {
             //Update prev_lvar
             prev_var = operand_var;
+
+            //Reset x
+            x = 1;
 
             //Update left vec and increment index
             op_points_list.push(inner_vec.clone());
 
             inner_vec.clear();
-            inner_vec.push([x, y])
+            inner_vec.push([x, y]);
         }
+
+        // Increment x
+        x = x+1;
+        
 
         //Save points if its the last operation
         if current_index == last_index {
@@ -190,12 +204,58 @@ fn compute_op_points(parsed_operations: Vec<[String; 5]>, op_type: i32) -> Vec<V
 
         current_index = current_index + 1;
     }
-
-    println!("Left operand points: {:?}", op_points_list);
+    println!("Operand points: {:?}", op_points_list);
     return op_points_list;
 }
 
-fn compute_op_polynomial() {}
+fn compute_op_polynomial(op_points: Vec<Vec<[i32; 2]>>) ->(Vec<Polynomial<f64>>,Polynomial<f64>) {
+
+    let mut polynomial_array:Vec<Polynomial<f64>> = Vec::new();
+    let mut final_polynomial:Polynomial<f64> = Polynomial::new(vec![0.0]);
+
+    for points in &op_points{
+        //First variable polynomial
+        let mut x_point_list:Vec<i32> = Vec::new();
+        let mut y_point_list:Vec<i32> = Vec::new();
+    
+        //Seperate x and y point list
+        for point in points{
+            
+            let x = point[0];
+            let y = point[1];
+                    
+            x_point_list.push(x);
+            y_point_list.push(y);
+            
+        }
+
+        println!("X_POINT_LIST: {:?}",x_point_list);
+        println!("Y_POINT_LIST: {:?}",y_point_list);
+
+        let x_point_list_f64:Vec<f64> = x_point_list.iter().map(|&p| p as f64).collect();
+        let y_point_list_f64:Vec<f64>= y_point_list.iter().map(|&p| p as f64).collect();
+
+        //Interpolate polynomial from those points
+        let c0_polynomial = Polynomial::lagrange(&x_point_list_f64, &y_point_list_f64).unwrap();
+        println!("Polynomial: {:?}",c0_polynomial);
+
+        polynomial_array.push(c0_polynomial);
+
+    }
+
+    println!("Polynomial in the operand : {:?}",polynomial_array);
+
+    //Compute final polynomial
+    for poly in &polynomial_array{
+        final_polynomial = final_polynomial + poly;
+    }
+
+    println!("Final polynomial: {:?}",final_polynomial);
+
+    return (polynomial_array,final_polynomial);
+
+
+}
 
 fn main() {
     let parsed_operations = parse_circuit();
@@ -206,4 +266,57 @@ fn main() {
     let ouput_op_points = compute_op_points(parsed_operations, 2);
 
     //Lagrange interpolation
+    let (left_operand_polynomial_array,left_operand_polynomial) = compute_op_polynomial(left_op_points);
+    let (right_operand_polynomial_array,right_operand_polynomial) = compute_op_polynomial(right_op_points);
+    let (output_operand_polynomial_array,output_operand_polynomial) = compute_op_polynomial(ouput_op_points);
+
+    for lop in &left_operand_polynomial_array{
+
+        println!("Left polynomial data: {:?}",lop.data());
+    }
+    // Select generator 
+    // let p:i64 = 21888242871839275222246405745257275088696311157297823662689037894645226208583; //Prime number for bn254
+
+    //Sample random generator
+    let mut rng = ark_std::test_rng();
+    // let g = G::rand(&mut rng);
+
+    let g = G::generator(); //Generator on the curve
+
+    let s = ScalarField::rand(&mut rng);
+    let rohl = ScalarField::rand(&mut rng);
+    let rohr = ScalarField::rand(&mut rng);
+    let roho = rohl * rohr;
+    let alphal = ScalarField::rand(&mut rng);
+    let alphar = ScalarField::rand(&mut rng);
+    let alphao = ScalarField::rand(&mut rng);
+    let beta = ScalarField::rand(&mut rng);
+    let gamma =  ScalarField::rand(&mut rng);
+
+    let gl = g*rohl;
+    let gr = g*rohr;
+    let go = g*roho;
+
+    println!("Generator: {:?}",g);
+    println!("Secret s: {:?}",s);
+    println!("Rohl: {:?}",rohl);
+    println!("Rohr: {:?}",rohr);
+    println!("Roho: {:?}",roho);
+    println!("alphal: {:?}",alphal);
+    println!("alphar: {:?}",alphar);
+    println!("alphao: {:?}",alphao);
+    println!("beta: {:?}",beta);
+    println!("gamma: {:?}",gamma);
+    println!("gl: {:?}",gl);
+    println!("gr: {:?}",gr);
+    println!("go: {:?}",go);
+
+
+    let result = Polynomial::lagrange(&[1.0,2.0,3.0], &[3.0,1.0,1.0]).unwrap();
+    println!("Result: {:?}",result);
+
+
+
+
+
 }
