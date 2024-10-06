@@ -3,12 +3,14 @@ name = "pikachu"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "pikachu"
+path = "src/trusted_setup.rs"
+
 [dependencies]
-polynomial = "0.2.6"
 ark-ec = "0.4.2"
 ark-ff = "0.4.2"
 ark-poly = "0.4.2"
 ark-serialize = "0.4.2"
 ark-bn254 = "0.4.0"
 ark-std = "0.4.0"
-mathru = "0.15.3"
