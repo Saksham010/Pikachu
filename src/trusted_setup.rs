@@ -2,315 +2,73 @@ use core::panic;
 use std::{vec};
 use ark_bn254::g1::Config;
 use ark_ec::short_weierstrass::Projective;
-use ark_ec::Group;
+use ark_ec::{AffineRepr, CurveGroup, Group};
+use ark_ff::{Fp, MontBackend, PrimeField};
 use std::fs::File;
-use std::io::Read;
-use std::path::Path;
-use ark_bn254::{G1Projective as G, Fr as ScalarField};
-use ark_std::{Zero, UniformRand, ops::Mul,ops::Sub};
+use ark_bn254::{Fr as ScalarField, G1Projective as G};
+use ark_std::{UniformRand};
 use ark_poly::{univariate::DensePolynomial, DenseUVPolynomial,Polynomial};
 use ark_poly::{univariate::DenseOrSparsePolynomial};
-use pikachu::lagrange_interpolation_polynomial;
+use pikachu::{parse_circuit,compute_op_points,compute_op_polynomial,compute_vanishing_polynomial};
 use ark_bn254::Fr;
+use ark_serialize::CanonicalSerialize;
+use std::io::prelude::*;
+use std::io::Result;
 
 
-fn shield_brack_parser(op: &str) -> (String, String) {
-    let op_arr: Vec<char> = op.chars().collect();
-    let digits: String = op.chars().filter(|c: &char| c.is_numeric()).collect();
-    let operand: String = op.chars().filter(|c| c.is_alphabetic()).collect();
+fn save_key_to_file(key:Vec<Vec<Projective<Config>>>,file_name:&str) -> Result<()>{
+    let mut file = File::create(file_name).unwrap();
+    const DELIMITER:&[u8] = &[0];
+    for vector in key {
+        for element in vector {
 
-    if op_arr[0] == '[' {
-        let sub = '-';
-        let ref_digits = &digits;
-        let coeff = sub.to_string() + ref_digits;
-        return (coeff, operand);
-    } else {
-        return (digits, operand);
-    }
-}
+            println!("Element: {:?}",element);
+            println!("Element (X) : {:?}",element.x);
+            println!("Element (Y) : {:?}",element.y);
+            println!("Element (Z) : {:?}",element.z);
 
-fn parse_circuit() -> Vec<[String; 5]> {
-    let path = Path::new("circuit.pika");
-    let file = File::open(path);
-    let mut contents = String::new();
-    let res = file.expect("Unable to open").read_to_string(&mut contents);
-    let mut shield_brack: bool = false;
-    let mut parsed_operations: Vec<[String; 5]> = Vec::new();
 
-    //Handle error
-    match res {
-        Ok(_) => {
-            println!("Analyzing circuit");
+            let element_x = element.x;
+            let element_y = element.y;
+            let element_z = element.z;
+
+            let mut serialized_data_x = Vec::new();
+            let mut serialized_data_y = Vec::new();
+            let mut serialized_data_z = Vec::new();
+
+            element_x.serialize_uncompressed(&mut serialized_data_x).unwrap();
+            element_y.serialize_uncompressed(&mut serialized_data_y).unwrap();
+            element_z.serialize_uncompressed(&mut serialized_data_z).unwrap();
+
+            let x_len: Vec<u8> = vec![serialized_data_x.len() as u8];
+            let y_len: Vec<u8> = vec![serialized_data_y.len() as u8];
+            let z_len: Vec<u8> = vec![serialized_data_z.len() as u8];
+
+            println!("X_Data length: {:?}", &x_len);
+            println!("Y_Data length: {:?}", &y_len);
+            println!("Z_Data length: {:?}", &z_len);
+
+            println!("Data to be stored (X): {:?}",&serialized_data_x);
+            println!("Data to be stored (Y): {:?}",&serialized_data_y);
+            println!("Data to be stored (Z): {:?}",&serialized_data_z);
+
+            file.write_all(&x_len).unwrap();
+            file.write_all(&mut serialized_data_x).unwrap();
+
+            file.write_all(&y_len).unwrap();
+            file.write_all(&mut serialized_data_y).unwrap();
+
+            file.write_all(&z_len).unwrap();
+            file.write_all(&mut serialized_data_z).unwrap();
         }
-        Err(_) => {
-            panic!("Circuit analysis failed");
-        }
-    }
-
-    //Remove whitespace
-    let operations: Vec<String> = contents
-        .split("\r\n")
-        .filter(|o| *o != "")
-        .map(|op: &str| op.chars().filter(|c: &char| !c.is_whitespace()).collect())
-        .collect();
-    println!("Unparsed Operations: {:?}", operations);
-
-    let _supported_operation = ['*', '+', '-', '/'];
-    let _supported_operation_string = "*+-/";
-
-    operations.iter().for_each(|op| {
-        let mut sp_idx = None;
-        let idx: usize;
-
-        let op_count = op
-            .chars()
-            .into_iter()
-            .filter(|c| {
-                //Don't count operator inside sqbracket
-                if *c == '[' {
-                    shield_brack = true;
-                } else if *c == ']' {
-                    shield_brack = false;
-                }
-
-                if !shield_brack {
-                    _supported_operation_string.contains(*c)
-                } else {
-                    return false;
-                }
-            })
-            .count();
-
-        // println!("Total operator count in the current operation: {}",op_count);
-
-        match op_count {
-            0 => {
-                panic!("ERROR: Missing operand in circuit");
-            }
-            1 => {
-                //Find operator index
-                for sp in _supported_operation {
-                    sp_idx = op.find(sp);
-                    match sp_idx {
-                        Some(_) => break,
-                        None => {}
-                    }
-                }
-
-                match sp_idx {
-                    Some(_idx) => idx = _idx,
-                    None => {
-                        panic!("ERROR: Unsupported operation")
-                    }
-                }
-
-                //Use operator index to split to 3 parts ie left operand,right operand and result
-                let (leftoperand, r) = op.split_at(idx);
-                let right = &r[1..];
-                let parts: Vec<&str> = right.split("==").collect();
-                let rightoperand = parts[0];
-                let output = parts[parts.len() - 1];
-
-                let (lcoeff, lop) = shield_brack_parser(leftoperand);
-                let (rcoeff, rop) = shield_brack_parser(rightoperand);
-
-                //Check if any operand is empty
-                if lop.is_empty() || rop.is_empty() || output.is_empty() {
-                    panic!("ERROR: Invalid operands or output in circuit")
-                }
-
-                let val_vec: [String; 5] = [lcoeff, lop, rcoeff, rop, String::from(output)];
-                println!("Val Vec: {:?}", val_vec);
-
-                //Borrow value
-                parsed_operations.push(val_vec);
-            }
-            _ => {
-                panic!("ERROR: More than one operand in circuit");
-            }
-        }
-    });
-
-    println!("Circuit analyzed");
-    return parsed_operations;
-}
-
-fn compute_op_points(parsed_operations: Vec<[String; 5]>, op_type: i32) -> Vec<Vec<[i32; 2]>> {
-    let mut op_points_list: Vec<Vec<[i32; 2]>> = Vec::new();
-
-    let offset = if op_type == 0 {
-        0
-    } else if op_type == 1 {
-        2
-    } else {
-        4
-    };
-
-    // Variable ocurrance map
-    let mut occurance_list:Vec<String> = Vec::new();
-    for array in &parsed_operations{
-        let mut exist = false;
-        // println!("Occurance list currently: {:?}",&occurance_list);
-        for op_var in &occurance_list{
-            
-            if op_type == 2{
-
-                 if op_var == &array[offset] {
-                     exist = true;
-                 }
-            }else {
-                if op_var == &array[offset+1]{
-                    exist = true;
-                }
-            }
-        }
-        if !exist {
-            if op_type == 2{
-                occurance_list.push(array[offset].clone());
-            }else{
-                occurance_list.push(array[offset+1].clone());
-            }
-        }
+        file.write_all(DELIMITER)?; // Write delimiter after vector element
     }
 
-    println!("Occurance list: {:?}",occurance_list);
-
-    let mut x_index:i32 = 1;
-
-    for oc_var in &occurance_list{
-        let mut inner_vec: Vec<[i32; 2]> = Vec::new();
-
-        for array in &parsed_operations{
-
-            let coeff: &str = if &array[0 + offset] == "" || op_type == 2 {
-                "1"
-            } else {
-                &array[0 + offset]
-            }; 
-
-    
-            let op_var:&String = if op_type == 2 {
-                &array[offset]
-            } else {
-                &array[offset+1]
-            };
-    
-            let x: i32 = x_index;
-            let y:i32 = coeff.parse().expect("Not a valid number");
-
-            println!("[X,Y]: [{:?},{:?}]",x,y);
-            if oc_var == op_var{
-                inner_vec.push([x,y]);
-                
-            } else {
-                inner_vec.push([x,0]);
-            }
-            x_index = x_index + 1;
-        }
-
-        //Add inner vec to op list
-        op_points_list.push(inner_vec.clone());
-        inner_vec.clear();
-
-        //Reset x for another occurance
-        x_index = 1;
-    }
-    println!("Operand points: {:?}", op_points_list);
-    return op_points_list;
-}
-
-fn compute_op_polynomial(op_points: Vec<Vec<[i32; 2]>>) ->(Vec<DensePolynomial<Fr>>,DensePolynomial<Fr>) {
-
-    let mut polynomial_array:Vec<DensePolynomial<Fr>> = Vec::new();
-    let mut final_polynomial:DensePolynomial<Fr> = DensePolynomial::from_coefficients_vec(vec![Fr::zero()]);
-
-    for points in &op_points{
-        //First variable polynomial
-        let mut x_point_list:Vec<i32> = Vec::new();
-        let mut y_point_list:Vec<i32> = Vec::new();
-    
-        //Seperate x and y point list
-        for point in points{
-            
-            let x = point[0];
-            let y = point[1];
-                    
-            x_point_list.push(x);
-            y_point_list.push(y);
-            
-        }
-
-        
-        let x_point_list_u64:Vec<u64> = x_point_list.iter().map(|&p| p as u64).collect();
-        let y_point_list_u64:Vec<u64>= y_point_list.iter().map(|&p| p as u64).collect();
-
-        println!("X_POINT_LIST: {:?}",x_point_list_u64);
-        println!("Y_POINT_LIST: {:?}",y_point_list_u64);
-
-
-        let pair_point_list: Vec<(Fr, Fr)> = x_point_list_u64.iter()
-        .zip(y_point_list_u64.iter())
-        .map(|(&x, &y)| (Fr::from(x), Fr::from(y)))
-        .collect();
-
-
-        //Interpolate polynomial from those points
-        let c0_polynomial = lagrange_interpolation_polynomial(&pair_point_list);
-        println!("Polynomial: {:?}",c0_polynomial);
-
-        polynomial_array.push(c0_polynomial);
-
-    }
-
-    println!("Polynomial in the operand : {:?}",polynomial_array);
-
-    //Compute final polynomial
-    for poly in &polynomial_array{
-        final_polynomial = &final_polynomial + poly;
-    }
-
-    println!("Final polynomial: {:?}",final_polynomial);
-
-    return (polynomial_array,final_polynomial);
-
-
-}
-
-
-fn compute_vanishing_polynomial(length:usize) -> DensePolynomial<Fr> {
-    
-    let mut vanishing_index:u64 = 0;    
-    let mut vanishing_list:Vec<[Fr;2]> = Vec::new();
-    let mut count = 0;
-    // let p = <Fr as PrimeField>::MODULUS;
-    // // let p:u64 = 21888242871839275222246405745257275088548364400416034343698204186575808495617;
-
-    loop{
-        if count == length {
-            break;
-        }
-        vanishing_index = vanishing_index + 1;
-
-        //Subtract 0 with vanishing index field we get its negative under the prime field
-        let neg_vanishing_index_in_prime_field = Fr::zero() - Fr::from(vanishing_index);
-
-        vanishing_list.push([neg_vanishing_index_in_prime_field,Fr::from(1u64)]);
-        count += 1;
-    }
-
-
-    let mut vanishing_p:DensePolynomial<Fr> = DensePolynomial::from_coefficients_vec(vec![Fr::from(1u64)]); 
-
-    for l in vanishing_list{
-        vanishing_p = vanishing_p.mul(&DensePolynomial::from_coefficients_vec(l.to_vec()));
-    }
-
-    vanishing_p
-    
+    Ok(())
 }
 
 fn main() {
-    let parsed_operations = parse_circuit();
+    let parsed_operations = parse_circuit("circuit.pika");
     println!("Operations: {:?}", parsed_operations);
 
     let left_op_points = compute_op_points(parsed_operations.clone(), 0);
@@ -322,47 +80,7 @@ fn main() {
     let (right_operand_polynomial_array,right_operand_polynomial) = compute_op_polynomial(right_op_points);
     let (output_operand_polynomial_array,output_operand_polynomial) = compute_op_polynomial(ouput_op_points);
 
-
-    // --- Test --- Start
-    let a = Fr::from(1u64);
-    let b = Fr::from(2u64);
-    let c = Fr::from(1u64);
-    let r1 = Fr::from(12u64);
-    let r2 = Fr::from(1u64);
-
-    println!("LEFTOPARRAY: {:?}",left_operand_polynomial_array);
-    println!("LEFTOP: {:?}",left_operand_polynomial);
-
-    let final_left_polynomial = left_operand_polynomial.mul(&DensePolynomial::from_coefficients_vec(vec![a,Fr::zero()]));
-    let mut final_right_polynomial = DensePolynomial::from_coefficients_vec(vec![Fr::zero()]);
-    let mut final_out_polynomial = DensePolynomial::from_coefficients_vec(vec![Fr::zero()]);
-
-
-    for (i,poly) in right_operand_polynomial_array.iter().enumerate() {
-        if i == 0 {
-            final_right_polynomial =  final_right_polynomial + poly.mul(&DensePolynomial::from_coefficients_vec(vec![b,Fr::zero()]));
-        }else if i == 1{
-            final_right_polynomial =  final_right_polynomial + poly.mul(&DensePolynomial::from_coefficients_vec(vec![c,Fr::zero()]));
-        }
-    }
-
-    for (i,poly) in output_operand_polynomial_array.iter().enumerate() {
-        if i == 0 {
-            final_out_polynomial =  final_out_polynomial + poly.mul(&DensePolynomial::from_coefficients_vec(vec![r1,Fr::zero()]));
-        }else if i == 1{
-            final_out_polynomial =  final_out_polynomial + poly.mul(&DensePolynomial::from_coefficients_vec(vec![r2,Fr::zero()]));
-        }
-    }
-
-    
-    let polynomial_p = &final_left_polynomial.mul(&final_right_polynomial) - &final_out_polynomial;
     let vanishing_p = compute_vanishing_polynomial(parsed_operations.len());
-    let (qoutient,remainder)= DenseOrSparsePolynomial::from(polynomial_p.clone()).divide_with_q_and_r(&DenseOrSparsePolynomial::from(vanishing_p.clone())).unwrap();
-
-    println!("Quotient: {:?}",qoutient);
-    println!("Remainder: {:?}",remainder);
-
-    ///TEST --- Complete
 
     //Sample random generator
     let mut rng = ark_std::test_rng();
@@ -396,7 +114,7 @@ fn main() {
 
     let mut gl_beta_left_operand_poly_eval:Vec<Projective<Config>> = Vec::new(); //Proving key
     let mut gr_beta_right_operand_poly_eval:Vec<Projective<Config>> = Vec::new(); //Proving key
-    let mut go_beta_output_operand_poly_eval:Vec<Projective<Config>> = Vec::new(); //Porving key
+    let mut go_beta_output_operand_poly_eval:Vec<Projective<Config>> = Vec::new(); //Proving key
 
     let gl_t_eval = gl * t_eval; //Proving key
     let gr_t_eval = gr * t_eval; //Proving key
@@ -419,7 +137,7 @@ fn main() {
 
     //Compute g^s^k for 0<= k <= no of operations
     for (i,_) in (0..parsed_operations.len()).into_iter().enumerate(){
-        let gi = (g*s)*ScalarField::from(i as u64);
+        let gi = (g*s)*ScalarField::from((i+1) as u64);
         gsk.push(gi);
     }
 
@@ -477,4 +195,87 @@ fn main() {
     // println!("gl: {:?}",gl);
     // println!("gr: {:?}",gr);
     // println!("go: {:?}",go);
+
+
+    // Serialize proving and verification key to bytes and save them in a file
+    
+    // Provking key part 2
+    let pk_2: Vec<Projective<Config>> = vec![
+        gl_t_eval,
+        gr_t_eval,
+        go_t_eval,
+        gl_alphal_t_eval,
+        gr_alphar_t_eval,
+        go_alphao_t_eval,
+        gl_beta_t_eval,
+        gr_beta_t_eval,
+        go_beta_t_eval,
+        g_alphal,
+        g_alphar,
+        g_alphao,
+        g_gamma,
+        g_beta_gamma
+    ];
+
+    //Final proving key
+    let proving_key:Vec<Vec<Projective<Config>>> = vec![
+        gsk.clone(),
+        gl_left_operand_poly_eval.clone(),
+        gr_right_operand_poly_eval.clone(),
+        go_output_operand_poly_eval.clone(),
+        gl_alpha_left_operand_poly_eval,
+        gr_alpha_right_operand_poly_eval,
+        go_alpha_output_operand_poly_eval,
+        gl_beta_left_operand_poly_eval,
+        gr_beta_right_operand_poly_eval,
+        go_beta_output_operand_poly_eval,
+        pk_2
+    ];
+
+
+    // Verification key part 2
+    let vk_2:Vec<Projective<Config>> = vec![
+        go_t_eval,
+        g_alphal,
+        g_alphar,
+        g_alphao,
+        g_gamma,
+        g_beta_gamma
+    ];
+
+    //Final verification key
+    let verification_key:Vec<Vec<Projective<Config>>> = vec![
+        gl_left_operand_poly_eval,
+        gr_right_operand_poly_eval,
+        go_output_operand_poly_eval,
+        vk_2        
+    ];
+
+
+    println!("Proving key: {:?}",proving_key);
+    println!("Verification key: {:?}",verification_key);
+
+    // Serialize and save
+    let mut res = save_key_to_file(proving_key, "proving_key.bin"); // Save proving key
+
+    match &res {
+        Ok(()) => {
+            println!("Proving key generated !!");
+        }
+        Err(msg)=>{
+            println!("Failed to generate proving key: {:?}",msg);
+        }
+    }
+
+    res = save_key_to_file(verification_key, "verification_key.bin"); // Save verification key
+
+    match &res {
+        Ok(()) => {
+            println!("Verification key generated !!");
+        }
+        Err(msg)=>{
+            println!("Failed to generate verification key: {:?}",msg);
+        }
+    }
+
 }
