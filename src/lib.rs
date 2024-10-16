@@ -150,7 +150,7 @@ pub fn parse_circuit(file_name:&str) -> Vec<[String; 5]> {
     return parsed_operations;
 }
 
-pub fn compute_op_points(parsed_operations: Vec<[String; 5]>, op_type: i32) -> Vec<Vec<[i32; 2]>> {
+pub fn compute_op_points(parsed_operations: Vec<[String; 5]>, op_type: i32) -> (Vec<Vec<[i32; 2]>>,Vec<String>) {
     let mut op_points_list: Vec<Vec<[i32; 2]>> = Vec::new();
 
     let offset = if op_type == 0 {
@@ -231,7 +231,7 @@ pub fn compute_op_points(parsed_operations: Vec<[String; 5]>, op_type: i32) -> V
         x_index = 1;
     }
     println!("Operand points: {:?}", op_points_list);
-    return op_points_list;
+    return (op_points_list,occurance_list);
 }
 
 pub fn compute_op_polynomial(op_points: Vec<Vec<[i32; 2]>>) ->(Vec<DensePolynomial<Fr>>,DensePolynomial<Fr>) {
