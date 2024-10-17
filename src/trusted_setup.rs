@@ -1,4 +1,4 @@
-use core::panic;
+use core::{panic, time};
 use std::{vec};
 use ark_bn254::g1::Config;
 use ark_bn254::g2::Config as Config2;
@@ -80,36 +80,12 @@ impl ProjectiveConfigTypeT for ProjectiveConfigType {
     
 }
 
-
-//Trait for projective config type to access coordinate
-// trait ProjectivePoint {
-//     fn coordinates(&self) -> (Self::FieldType, Self::FieldType, Self::FieldType);
-//     type FieldType;
-// }
-
-// impl ProjectivePoint for ProjectiveConfigType{
-
-// }
-
 fn save_key_to_file(key:Vec<Vec<ProjectiveConfigType>>,file_name:&str) -> Result<()>{
     let mut file = File::create(file_name).unwrap();
     const DELIMITER:&[u8] = &[0];
     for vector in key {
         for element in vector {
-            // let element: ProjectiveConfigType = ProjectiveConfigType::GOne(_element);
-            // ProjectiveConfigType::GOne(element).x;
-
             let(x,y,z) = element.get_coordinates();
-
-            // let (x,y,z):(ProjectiveCoordinateType,ProjectiveCoordinateType,ProjectiveCoordinateType) = match element {
-            //     ProjectiveConfigType::GOne(element)=>{
-            //         (ProjectiveCoordinateType::C1(element.x),ProjectiveCoordinateType::C1(element.y),ProjectiveCoordinateType::C1(element.z))
-
-            //     }
-            //     ProjectiveConfigType::GTwo(element)=>{
-            //         (ProjectiveCoordinateType::C2(element.x),ProjectiveCoordinateType::C2(element.y),ProjectiveCoordinateType::C2(element.z))
-            //     }
-            // }
 
             println!("Element: {:?}",element);
             println!("Element (X) : {:?}",x);
@@ -129,11 +105,6 @@ fn save_key_to_file(key:Vec<Vec<ProjectiveConfigType>>,file_name:&str) -> Result
             element_y.serialize_uncomp(&mut serialized_data_y);
             element_z.serialize_uncomp(&mut serialized_data_z);
 
-
-            // element_x.serialize_uncompressed(&mut serialized_data_x).unwrap();
-            // element_y.serialize_uncompressed(&mut serialized_data_y).unwrap();
-            // element_z.serialize_uncompressed(&mut serialized_data_z).unwrap();
-
             let x_len: Vec<u8> = vec![serialized_data_x.len() as u8];
             let y_len: Vec<u8> = vec![serialized_data_y.len() as u8];
             let z_len: Vec<u8> = vec![serialized_data_z.len() as u8];
@@ -161,57 +132,13 @@ fn save_key_to_file(key:Vec<Vec<ProjectiveConfigType>>,file_name:&str) -> Result
     Ok(())
 }
 
-fn save_key_to_file_g2(key:Vec<Vec<Projective<ark_bn254::g2::Config>>>,file_name:&str) -> Result<()>{
-    let mut file = File::create(file_name).unwrap();
-    const DELIMITER:&[u8] = &[0];
-    for vector in key {
-        for element in vector {
-
-            println!("Element: {:?}",element);
-            println!("Element (X) : {:?}",element.x);
-            println!("Element (Y) : {:?}",element.y);
-            println!("Element (Z) : {:?}",element.z);
-
-
-            let element_x = element.x;
-            let element_y = element.y;
-            let element_z = element.z;
-
-            let mut serialized_data_x = Vec::new();
-            let mut serialized_data_y = Vec::new();
-            let mut serialized_data_z = Vec::new();
-
-            element_x.serialize_uncompressed(&mut serialized_data_x).unwrap();
-            element_y.serialize_uncompressed(&mut serialized_data_y).unwrap();
-            element_z.serialize_uncompressed(&mut serialized_data_z).unwrap();
-
-            let x_len: Vec<u8> = vec![serialized_data_x.len() as u8];
-            let y_len: Vec<u8> = vec![serialized_data_y.len() as u8];
-            let z_len: Vec<u8> = vec![serialized_data_z.len() as u8];
-
-            println!("X_Data length: {:?}", &x_len);
-            println!("Y_Data length: {:?}", &y_len);
-            println!("Z_Data length: {:?}", &z_len);
-
-            println!("Data to be stored (X): {:?}",&serialized_data_x);
-            println!("Data to be stored (Y): {:?}",&serialized_data_y);
-            println!("Data to be stored (Z): {:?}",&serialized_data_z);
-
-            file.write_all(&x_len).unwrap();
-            file.write_all(&mut serialized_data_x).unwrap();
-
-            file.write_all(&y_len).unwrap();
-            file.write_all(&mut serialized_data_y).unwrap();
-
-            file.write_all(&z_len).unwrap();
-            file.write_all(&mut serialized_data_z).unwrap();
-        }
-        file.write_all(DELIMITER)?; // Write delimiter after vector element
+fn get_s_k(s:Fr,times:usize)->Fr{
+    let mut s_final =Fr::from(1u8);
+    for i in 0..times{
+        s_final = s_final*s;
     }
-
-    Ok(())
+    s_final
 }
-
 
 fn main() {
     let parsed_operations = parse_circuit("circuit.pika");
@@ -231,7 +158,7 @@ fn main() {
     //Sample random generator
     let mut rng = ark_std::test_rng();
     let g = G::generator(); //Generator on the curve
-    let g2 = G2::generator();
+    let g2 = G2::generator(); //Generator on the curve G2projective
 
     let s:Fr = ScalarField::rand(&mut rng);
     
@@ -249,14 +176,19 @@ fn main() {
     let gr = g*rohr;
     let go = g*roho;
 
+    let gr2 = g2 * rohr; //G2
 
-    let mut gsk :Vec<ProjectiveConfigType>= Vec::new(); //Proving key
+
+    // let mut gsk :Vec<ProjectiveConfigType>= Vec::new(); //Proving key
+    let mut g2sk :Vec<ProjectiveConfigType>= Vec::new(); //Proving key (G2)
     let mut gl_left_operand_poly_eval:Vec<ProjectiveConfigType> = Vec::new(); //Proving key and Verification key
     let mut gr_right_operand_poly_eval:Vec<ProjectiveConfigType> = Vec::new(); //Proving key and Verification key
+    let mut gr2_right_operand_poly_eval:Vec<ProjectiveConfigType> = Vec::new(); //Proving key and Verification key (G2)
     let mut go_output_operand_poly_eval:Vec<ProjectiveConfigType> = Vec::new(); //Porving key and Verification key
 
     let mut gl_alpha_left_operand_poly_eval:Vec<ProjectiveConfigType> = Vec::new(); //Proving key
     let mut gr_alpha_right_operand_poly_eval:Vec<ProjectiveConfigType> = Vec::new(); //Proving key
+    let mut gr2_alpha_right_operand_poly_eval:Vec<ProjectiveConfigType> = Vec::new(); //Proving key (G2)
     let mut go_alpha_output_operand_poly_eval:Vec<ProjectiveConfigType> = Vec::new(); //Porving key
 
     let mut gl_beta_left_operand_poly_eval:Vec<ProjectiveConfigType> = Vec::new(); //Proving key
@@ -265,10 +197,12 @@ fn main() {
 
     let gl_t_eval = gl * t_eval; //Proving key
     let gr_t_eval = gr * t_eval; //Proving key
+    let gr2_t_eval = gr2*t_eval;//Proving key(G2)
     let go_t_eval = go * t_eval; //Proving key and Verification key
 
     let gl_alphal_t_eval = gl * (alphal*t_eval); //Proving key
     let gr_alphar_t_eval = gr * (alphar*t_eval); //Proving key
+    let gr2_alphar_t_eval = gr2* (alphar*t_eval); //Proving key (G2)
     let go_alphao_t_eval = go * (alphao*t_eval); //Proving key
 
     let gl_beta_t_eval = gl * (beta*t_eval); //Proving key
@@ -288,8 +222,10 @@ fn main() {
 
     //Compute g^s^k for 0<= k <= no of operations
     for (i,_) in (0..parsed_operations.len()).into_iter().enumerate(){
-        let gi = (g*s)*ScalarField::from((i+1) as u64);
-        gsk.push(ProjectiveConfigType::GOne(gi));
+        let max_index = i+1;
+        let s_val = get_s_k(s.clone(),max_index);
+        let g2i = g2*s_val;
+        g2sk.push(ProjectiveConfigType::GTwo(g2i)); //G2
     }
 
     //Compute evaluations : gl^li(s) , gl^alphal*li(s) , gl^beta*li(s) 
@@ -312,6 +248,12 @@ fn main() {
         let gr_alphar_ri = gr * (alphar*eval);
         let gr_beta_ri = gr * (beta*eval);
         let gr_ri = gr*eval;
+
+        let gr2_ri = gr2*eval;
+        let gr2_alphar_ri = gr2 * (alphar*eval);
+
+        gr2_right_operand_poly_eval.push(ProjectiveConfigType::GTwo(gr2_ri)); //G2
+        gr2_alpha_right_operand_poly_eval.push(ProjectiveConfigType::GTwo(gr2_alphar_ri)); //G2
 
         gr_alpha_right_operand_poly_eval.push(ProjectiveConfigType::GOne(gr_alphar_ri));
         gr_beta_right_operand_poly_eval.push(ProjectiveConfigType::GOne(gr_beta_ri));
@@ -355,7 +297,6 @@ fn main() {
 
     //Final proving key
     let proving_key:Vec<Vec<ProjectiveConfigType>> = vec![
-        gsk.clone(),
         gl_left_operand_poly_eval.clone(),
         gr_right_operand_poly_eval.clone(),
         go_output_operand_poly_eval.clone(),
@@ -365,7 +306,14 @@ fn main() {
         gl_beta_left_operand_poly_eval,
         gr_beta_right_operand_poly_eval,
         go_beta_output_operand_poly_eval,
-        pk_2
+        pk_2,
+        vec![
+            ProjectiveConfigType::GTwo(gr2_t_eval),
+            ProjectiveConfigType::GTwo(gr2_alphar_t_eval)
+        ],
+        gr2_right_operand_poly_eval,
+        gr2_alpha_right_operand_poly_eval,
+        g2sk.clone(),
     ];
 
 
@@ -421,17 +369,5 @@ fn main() {
             println!("Failed to generate verification key: {:?}",msg);
         }
     }
-
-    
-    // res = save_key_to_file_g2(verification_key_g2, "verification_key_g2.bin"); // Save verification key
-
-    // match &res {
-    //     Ok(()) => {
-    //         println!("Verification key generated !!");
-    //     }
-    //     Err(msg)=>{
-    //         println!("Failed to generate verification key: {:?}",msg);
-    //     }
-    // }
 
 }
