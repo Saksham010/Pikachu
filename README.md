@@ -10,7 +10,7 @@ Smol SNARK based on (Why and How Zksnark works) : https://arxiv.org/abs/1906.072
 - [Improvements](#improvements)
 
 ## Installation
-To install the project, run:
+Ensure you have [Rust](https://www.rust-lang.org/tools/install) and [Cargo](https://doc.rust-lang.org/cargo/) installed. To install the project, run:
 ```bash
 git clone https://github.com/Saksham010/Pikachu
 cd Pikachu
@@ -20,7 +20,7 @@ cargo build
 ## Usage
 
 ### Trusted setup
-Ensure you have [Rust](https://www.rust-lang.org/tools/install) and [Cargo](https://doc.rust-lang.org/cargo/) installed. Specify your constraint/circuit for computation in circuit.pika file in root folder. *Only supports multiplicative constraint as of now* Eg:
+Specify your constraint/circuit for computation in circuit.pika file in root folder. *Only supports multiplicative constraint as of now* Eg:
 
 ![Pikachu](assets/circuit.png)
 
