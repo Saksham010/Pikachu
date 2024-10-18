@@ -1,22 +1,19 @@
-use core::{panic, time};
-use std::{vec};
+use std::vec;
 use ark_bn254::g1::Config;
 use ark_bn254::g2::Config as Config2;
-use ark_ec::bn::G2Projective;
 use ark_ec::short_weierstrass::Projective;
-use ark_ec::{AffineRepr, CurveGroup, Group};
-use ark_ff::{Fp, MontBackend,QuadExtField,Fp2ConfigWrapper, PrimeField};
+use ark_ec::Group;
+use ark_ff::{Fp, MontBackend,QuadExtField,Fp2ConfigWrapper};
 use std::fs::File;
 use ark_bn254::{Fr as ScalarField,FqConfig,Fq2Config, G1Projective as G, G2Projective as G2};
-use ark_std::{UniformRand};
-use ark_poly::{univariate::DensePolynomial, DenseUVPolynomial,Polynomial};
-use ark_poly::{univariate::DenseOrSparsePolynomial};
+use ark_std::UniformRand;
+use ark_poly::Polynomial;
 use pikachu::{parse_circuit,compute_op_points,compute_op_polynomial,compute_vanishing_polynomial};
 use ark_bn254::Fr;
 use ark_serialize::CanonicalSerialize;
 use std::io::prelude::*;
 use std::io::Result;
-
+use rand::rngs::OsRng; 
 
 //For G1Projective and G2 projective coordinates
 #[derive(Debug)]
@@ -87,12 +84,6 @@ fn save_key_to_file(key:Vec<Vec<ProjectiveConfigType>>,file_name:&str) -> Result
         for element in vector {
             let(x,y,z) = element.get_coordinates();
 
-            println!("Element: {:?}",element);
-            println!("Element (X) : {:?}",x);
-            println!("Element (Y) : {:?}",y);
-            println!("Element (Z) : {:?}",z);
-
-
             let element_x = x;
             let element_y = y;
             let element_z = z;
@@ -108,14 +99,6 @@ fn save_key_to_file(key:Vec<Vec<ProjectiveConfigType>>,file_name:&str) -> Result
             let x_len: Vec<u8> = vec![serialized_data_x.len() as u8];
             let y_len: Vec<u8> = vec![serialized_data_y.len() as u8];
             let z_len: Vec<u8> = vec![serialized_data_z.len() as u8];
-
-            println!("X_Data length: {:?}", &x_len);
-            println!("Y_Data length: {:?}", &y_len);
-            println!("Z_Data length: {:?}", &z_len);
-
-            println!("Data to be stored (X): {:?}",&serialized_data_x);
-            println!("Data to be stored (Y): {:?}",&serialized_data_y);
-            println!("Data to be stored (Z): {:?}",&serialized_data_z);
 
             file.write_all(&x_len).unwrap();
             file.write_all(&mut serialized_data_x).unwrap();
@@ -134,29 +117,30 @@ fn save_key_to_file(key:Vec<Vec<ProjectiveConfigType>>,file_name:&str) -> Result
 
 fn get_s_k(s:Fr,times:usize)->Fr{
     let mut s_final =Fr::from(1u8);
-    for i in 0..times{
+    for _ in 0..times{
         s_final = s_final*s;
     }
     s_final
 }
 
-fn main() {
+pub fn main() {
     let parsed_operations = parse_circuit("circuit.pika");
-    println!("Operations: {:?}", parsed_operations);
+    // println!("Operations: {:?}", parsed_operations);
 
     let (left_op_points,_) = compute_op_points(parsed_operations.clone(), 0);
     let (right_op_points,_) = compute_op_points(parsed_operations.clone(), 1);
     let (ouput_op_points,_) = compute_op_points(parsed_operations.clone(), 2);
 
     //Lagrange interpolation
-    let (left_operand_polynomial_array,left_operand_polynomial) = compute_op_polynomial(left_op_points);
-    let (right_operand_polynomial_array,right_operand_polynomial) = compute_op_polynomial(right_op_points);
-    let (output_operand_polynomial_array,output_operand_polynomial) = compute_op_polynomial(ouput_op_points);
+    let (left_operand_polynomial_array,_) = compute_op_polynomial(left_op_points);
+    let (right_operand_polynomial_array,_) = compute_op_polynomial(right_op_points);
+    let (output_operand_polynomial_array,_) = compute_op_polynomial(ouput_op_points);
 
     let vanishing_p = compute_vanishing_polynomial(parsed_operations.len());
 
     //Sample random generator
-    let mut rng = ark_std::test_rng();
+    // let mut rng = ark_std::test_rng();
+    let mut rng = OsRng;
     let g = G::generator(); //Generator on the curve
     let g2 = G2::generator(); //Generator on the curve G2projective
 
@@ -212,8 +196,10 @@ fn main() {
     let g_alphal = g * alphal; //Verification key
     let g_alphar = g * alphar; //Verification key
     let g_alphao = g * alphao; //Verification key
-    let g_gamma = g * gamma; //Verification key
-    let g_beta_gamma = g * (beta*gamma); //Verification key
+    // let g_gamma = g * gamma; //Verification key
+    let g2_gamma = g2 * gamma; //Verification key (G2)
+    // let g_beta_gamma = g * (beta*gamma); //Verification key
+    let g2_beta_gamma = g2 * (beta*gamma); //Verification key (G2)
     let g_alphal_g2 = g2 * alphal;
     let g_alphar_g2 = g2 * alphar;
     let g_alphao_g2 = g2 * alphao;
@@ -291,8 +277,6 @@ fn main() {
         ProjectiveConfigType::GOne(g_alphal),
         ProjectiveConfigType::GOne(g_alphar),
         ProjectiveConfigType::GOne(g_alphao),
-        ProjectiveConfigType::GOne(g_gamma),
-        ProjectiveConfigType::GOne(g_beta_gamma)
     ];
 
     //Final proving key
@@ -320,32 +304,23 @@ fn main() {
     // Verification key part 2
     let vk_2:Vec<ProjectiveConfigType> = vec![
         ProjectiveConfigType::GOne(go_t_eval),
-        ProjectiveConfigType::GOne(g_alphal),
         ProjectiveConfigType::GOne(g_alphar),
-        ProjectiveConfigType::GOne(g_alphao),
-        ProjectiveConfigType::GOne(g_gamma),
-        ProjectiveConfigType::GOne(g_beta_gamma)
     ];
     
 
     //Final verification key
     let verification_key:Vec<Vec<ProjectiveConfigType>>= vec![
         vec![ProjectiveConfigType::GOne(g)],
-        gl_left_operand_poly_eval,
-        gr_right_operand_poly_eval,
-        go_output_operand_poly_eval,
         vk_2,
         vec![
             ProjectiveConfigType::GTwo(g2),
             ProjectiveConfigType::GTwo(g_alphal_g2),
             ProjectiveConfigType::GTwo(g_alphar_g2),
-            ProjectiveConfigType::GTwo(g_alphao_g2)
+            ProjectiveConfigType::GTwo(g_alphao_g2),
+            ProjectiveConfigType::GTwo(g2_gamma),
+            ProjectiveConfigType::GTwo(g2_beta_gamma),
         ] //G2 verification key for pairing
     ];
-
-
-    println!("Proving key: {:?}",proving_key);
-    println!("Verification key: {:?}",verification_key);
 
     // Serialize and save
     let mut res = save_key_to_file(proving_key, "proving_key.bin"); // Save proving key

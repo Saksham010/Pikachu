@@ -68,7 +68,6 @@ pub fn parse_circuit(file_name:&str) -> Vec<[String; 5]> {
         .filter(|o| *o != "")
         .map(|op: &str| op.chars().filter(|c: &char| !c.is_whitespace()).collect())
         .collect();
-    println!("Unparsed Operations: {:?}", operations);
 
     let _supported_operation = ['*', '+', '-', '/'];
     let _supported_operation_string = "*+-/";
@@ -135,7 +134,7 @@ pub fn parse_circuit(file_name:&str) -> Vec<[String; 5]> {
                 }
 
                 let val_vec: [String; 5] = [lcoeff, lop, rcoeff, rop, String::from(output)];
-                println!("Val Vec: {:?}", val_vec);
+                // println!("Val Vec: {:?}", val_vec);
 
                 //Borrow value
                 parsed_operations.push(val_vec);
@@ -188,7 +187,7 @@ pub fn compute_op_points(parsed_operations: Vec<[String; 5]>, op_type: i32) -> (
         }
     }
 
-    println!("Occurance list: {:?}",occurance_list);
+    // println!("Occurance list: {:?}",occurance_list);
 
     let mut x_index:i32 = 1;
 
@@ -213,7 +212,7 @@ pub fn compute_op_points(parsed_operations: Vec<[String; 5]>, op_type: i32) -> (
             let x: i32 = x_index;
             let y:i32 = coeff.parse().expect("Not a valid number");
 
-            println!("[X,Y]: [{:?},{:?}]",x,y);
+            // println!("[X,Y]: [{:?},{:?}]",x,y);
             if oc_var == op_var{
                 inner_vec.push([x,y]);
                 
@@ -230,7 +229,7 @@ pub fn compute_op_points(parsed_operations: Vec<[String; 5]>, op_type: i32) -> (
         //Reset x for another occurance
         x_index = 1;
     }
-    println!("Operand points: {:?}", op_points_list);
+    // println!("Operand points: {:?}", op_points_list);
     return (op_points_list,occurance_list);
 }
 
@@ -255,37 +254,23 @@ pub fn compute_op_polynomial(op_points: Vec<Vec<[i32; 2]>>) ->(Vec<DensePolynomi
             
         }
 
-        
         let x_point_list_u64:Vec<u64> = x_point_list.iter().map(|&p| p as u64).collect();
         let y_point_list_u64:Vec<u64>= y_point_list.iter().map(|&p| p as u64).collect();
-
-        println!("X_POINT_LIST: {:?}",x_point_list_u64);
-        println!("Y_POINT_LIST: {:?}",y_point_list_u64);
-
 
         let pair_point_list: Vec<(Fr, Fr)> = x_point_list_u64.iter()
         .zip(y_point_list_u64.iter())
         .map(|(&x, &y)| (Fr::from(x), Fr::from(y)))
         .collect();
 
-
         //Interpolate polynomial from those points
         let c0_polynomial = lagrange_interpolation_polynomial(&pair_point_list);
-        println!("Polynomial: {:?}",c0_polynomial);
-
         polynomial_array.push(c0_polynomial);
-
     }
-
-    println!("Polynomial in the operand : {:?}",polynomial_array);
 
     //Compute final polynomial
     for poly in &polynomial_array{
         final_polynomial = &final_polynomial + poly;
     }
-
-    println!("Final polynomial: {:?}",final_polynomial);
-
     return (polynomial_array,final_polynomial);
 
 

@@ -3,10 +3,6 @@ name = "pikachu"
 version = "0.1.0"
 edition = "2021"
 
-[[bin]]
-name = "pikachu"
-path = "src/prover/prover.rs"
-
 [dependencies]
 ark-ec = "0.4.2"
 ark-ff = "0.4.2"
@@ -14,5 +10,8 @@ ark-poly = "0.4.2"
 ark-serialize = "0.4.2"
 ark-bn254 = "0.4.0"
 ark-std = "0.4.0"
-hex = "0.4.3"
 serde_json = "1.0.128"
+base64 = "0.22.1"
+clap = { version = "4.5.13", features = ["derive"] }
+clap_derive = "4.5.13"
+rand = "0.8.5"

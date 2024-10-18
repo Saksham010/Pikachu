@@ -1,25 +1,22 @@
 use core::panic;
-use std::{vec};
+use std::vec;
 use ark_bn254::g1::Config;
 use ark_bn254::g2::Config as Config2;
-use ark_ec::bn::G1Projective;
-use ark_ec::{pairing, CurveGroup, Group}; // For the `.mul()` method
+use ark_ec::Group; // For the `.mul()` method
 use ark_ec::short_weierstrass::Projective;
-use ark_poly::polynomial;
 use std::fs::File;
 use std::io::{Cursor, Read,BufReader};
-use serde_json::{Value};
+use serde_json::Value;
 use std::collections::HashMap;
-use ark_bn254::{Bn254, FqConfig,Fq2Config, Fr as ScalarField, FrConfig, G1Projective as G, G2Projective as G2};
+use ark_bn254::{FqConfig,Fq2Config, Fr as ScalarField, FrConfig, G1Projective as G, G2Projective as G2};
 use ark_std::{Zero, UniformRand, ops::Mul,ops::Sub};
-use ark_poly::{univariate::DensePolynomial, DenseUVPolynomial,Polynomial};
-use ark_poly::{univariate::DenseOrSparsePolynomial};
+use ark_poly::{univariate::DensePolynomial, DenseUVPolynomial};
+use ark_poly::univariate::DenseOrSparsePolynomial;
 use ark_serialize::{CanonicalSerialize, CanonicalDeserialize};
-use std::io::prelude::*;
 use std::io::Result;
 use ark_ff::{Fp,Fp2,Fp2ConfigWrapper,QuadExtField, MontBackend};
 use pikachu::{parse_circuit,compute_op_points,compute_op_polynomial,compute_vanishing_polynomial};
-use ark_ec::pairing::{Pairing,PairingOutput};
+use base64::{engine::general_purpose, Engine as _}; // Import the Engine trait
 
 //For G1Projective and G2 projective coordinates
 #[derive(Debug)]
@@ -29,6 +26,25 @@ enum ProjectiveCoordinateType{
     C2(QuadExtField<Fp2ConfigWrapper<Fq2Config>>)
 }
 
+trait ProjectiveCoordinateTypeT{
+    fn serialize_uncomp(&self, serialized_data: &mut Vec<u8>);
+}
+
+impl ProjectiveCoordinateTypeT for ProjectiveCoordinateType{
+
+    fn serialize_uncomp(&self, serialized_data: &mut Vec<u8>) {
+        match self {
+            ProjectiveCoordinateType::C1(val)=>{
+                val.serialize_uncompressed(serialized_data).unwrap();
+            }
+            ProjectiveCoordinateType::C2(val)=>{
+                val.serialize_uncompressed(serialized_data).unwrap();
+
+            }
+        }
+    }
+
+}
 
 //For G1Projective and G2 projective elements
 #[derive(Debug)]
@@ -37,6 +53,32 @@ enum ProjectiveCoordinateType{
 enum ProjectiveConfigType {
     GOne(Projective<Config>),
     GTwo(Projective<Config2>)
+}
+
+trait ProjectiveConfigTypeT {
+    fn get_coordinates(&self)->(ProjectiveCoordinateType,ProjectiveCoordinateType,ProjectiveCoordinateType);
+}
+
+impl ProjectiveConfigTypeT for ProjectiveConfigType {
+    fn get_coordinates(&self)->(ProjectiveCoordinateType,ProjectiveCoordinateType,ProjectiveCoordinateType) {
+
+        match self {
+            ProjectiveConfigType::GOne(point)=>{
+                let x = ProjectiveCoordinateType::C1(point.x);
+                let y = ProjectiveCoordinateType::C1(point.y);
+                let z = ProjectiveCoordinateType::C1(point.z);
+                (x,y,z)
+
+            }
+            ProjectiveConfigType::GTwo(point)=>{
+                let x = ProjectiveCoordinateType::C2(point.x);
+                let y = ProjectiveCoordinateType::C2(point.y);
+                let z = ProjectiveCoordinateType::C2(point.z);
+                (x,y,z)
+            }
+        }
+    }
+    
 }
 
 const DELIMITER: &[u8] = &[0]; // Inner delimiter for separating vec of elements
@@ -58,7 +100,6 @@ fn load_key_from_file(file_name:&str,g1g2_seperator_index:u8) -> Result<Vec<Vec<
 
     // Deserialize each values
     while (cursor.position() as usize) < cursor.get_ref().len(){ //Ignoring the last 0 delimiter
-
 
         //Read the length
         let mut element_len =[0u8];
@@ -104,11 +145,8 @@ fn load_key_from_file(file_name:&str,g1g2_seperator_index:u8) -> Result<Vec<Vec<
             let deserialized_z:QuadExtField<Fp2ConfigWrapper<Fq2Config>> = Fp2::deserialize_uncompressed(&mut cursorz).unwrap();
     
             let element:Projective<Config2> = G2::new_unchecked(deserialized_x, deserialized_y, deserialized_z); //Note only unchecked returns projective representation, since we construct from already existing group we can ignore the check
-           
             key_vec_inner.push(ProjectiveConfigType::GTwo(element)); //Push the element
     
-            println!("Iteration no: {:?}",iteration_no);
-            println!("Element: {:?}",element);
         }else{
     
             let deserialized_x:Fp<MontBackend<FqConfig,4>,4> = Fp::deserialize_uncompressed(&mut cursorx).unwrap();
@@ -118,15 +156,9 @@ fn load_key_from_file(file_name:&str,g1g2_seperator_index:u8) -> Result<Vec<Vec<
             let element:Projective<Config> = G::new_unchecked(deserialized_x, deserialized_y, deserialized_z); //Note only unchecked returns projective representation, since we construct from already existing group we can ignore the check
     
             key_vec_inner.push(ProjectiveConfigType::GOne(element)); //Push the element
-    
-            println!("Iteration no: {:?}",iteration_no);
-            println!("Element: {:?}",element);
-
         }
 
     }
-
-    println!("{:?}: {:?}",file_name,final_key);
     Ok(final_key)
     
 }
@@ -226,20 +258,79 @@ fn compute_encrypted_polynomial_evaluation_g2(g_operand_poly_eval:Vec<Projective
 
 }
 
+fn compute_encrypted_beta_polynomial_evaluation(g_beta_operand_poly_eval:Vec<ProjectiveConfigType>,occurance_list:Vec<String>,witness_values:HashMap<String,Value>)->Projective<Config>{
+    let mut g_beta_lop_eval:G = G::zero();
+    g_beta_operand_poly_eval.clone().iter()
+    .zip(occurance_list.clone().iter())
+    .for_each(|(_g_beta_lop_eval_part,variable)|{
+        let g_beta_lop_eval_part = extract_g1_element(*_g_beta_lop_eval_part);
 
-fn main(){
+        let does_exist = witness_values.contains_key(variable);
+        match does_exist {
+            true =>{
+                let var_value = witness_values.get(variable).unwrap();
+                let var_value_str = var_value.as_str().unwrap();
+                let var_value_u64 = var_value_str.parse::<u64>().unwrap();
+                g_beta_lop_eval = g_beta_lop_eval +  g_beta_lop_eval_part.mul(ScalarField::from(var_value_u64));
+            }
+            false => panic!("Variable: {:?} not found in the witness file",&variable)
+        }   
+    }); 
+
+    g_beta_lop_eval
+
+}
+
+fn generate_proof_string(proof:Vec<ProjectiveConfigType>)->String{
+    let mut proof_binary:Vec<u8> = Vec::new();
+    for (_,p) in proof.iter().enumerate(){
+        let(x,y,z) = p.get_coordinates();
+
+        let element_x = x;
+        let element_y = y;
+        let element_z = z;
+
+        let mut serialized_data_x = Vec::new();
+        let mut serialized_data_y = Vec::new();
+        let mut serialized_data_z = Vec::new();
+
+        element_x.serialize_uncomp(&mut serialized_data_x);
+        element_y.serialize_uncomp(&mut serialized_data_y);
+        element_z.serialize_uncomp(&mut serialized_data_z);
+
+        let x_len: Vec<u8> = vec![serialized_data_x.len() as u8];
+        let y_len: Vec<u8> = vec![serialized_data_y.len() as u8];
+        let z_len: Vec<u8> = vec![serialized_data_z.len() as u8];
+
+        proof_binary.extend(x_len);
+        proof_binary.extend(serialized_data_x);
+        proof_binary.extend(y_len);
+        proof_binary.extend(serialized_data_y);
+        proof_binary.extend(z_len);
+        proof_binary.extend(serialized_data_z);        
+    }
+
+    let proof_string = general_purpose::STANDARD.encode(proof_binary.clone());
+    proof_string
+    
+}
+
+fn wishper(data:&str){
+    println!("{}",data);
+}
+
+pub fn main(){
 
     //Read proving key
-    let proving_key = load_key_from_file("proving_key.bin",30).unwrap();
-
-    //Read verification key
-    let verification_key = load_key_from_file("verification_key.bin",13).unwrap();
+    wishper("Reading proving key"); 
+    let proving_key = load_key_from_file("proving_key.bin",28).unwrap();
     
     //Read witness values
+    wishper("Reading witness values"); 
     let witness_values = load_witness_values().unwrap();
 
+    //Parsing circuit
     let parsed_operations = parse_circuit("./src/prover/prover_polynomial.pika");
-    println!("Operations: {:?}", parsed_operations);
 
     let (left_op_points,left_occurance_list) = compute_op_points(parsed_operations.clone(), 0);
     let (right_op_points,right_occurance_list) = compute_op_points(parsed_operations.clone(), 1);
@@ -252,21 +343,15 @@ fn main(){
 
     let vanishing_p = compute_vanishing_polynomial(parsed_operations.len());
 
-    for (key, value) in &witness_values {
-        println!("{}: {}", key, value);
-    }
-
     //Compute operand polynomial
     let left_operand_polynomial = compute_final_polynomial(witness_values.clone(),left_operand_polynomial_array.clone(),left_occurance_list.clone());
     let right_operand_polynomial = compute_final_polynomial(witness_values.clone(),right_operand_polynomial_array.clone(),right_occurance_list.clone());
     let output_operand_polynomial = compute_final_polynomial(witness_values.clone(),output_operand_polynomial_array.clone(),output_occurance_list.clone());
     
     let polynomial_p = &left_operand_polynomial.mul(&right_operand_polynomial) - &output_operand_polynomial;
-    let (polynomial_h_p1,remainder)= DenseOrSparsePolynomial::from(polynomial_p.clone()).divide_with_q_and_r(&DenseOrSparsePolynomial::from(vanishing_p.clone())).unwrap();
+    let (polynomial_h_p1,_)= DenseOrSparsePolynomial::from(polynomial_p.clone()).divide_with_q_and_r(&DenseOrSparsePolynomial::from(vanishing_p.clone())).unwrap();
     
-    println!("Quotient: {:?}",polynomial_h_p1);
-    println!("Remainder: {:?}",remainder);
-    assert_eq!(DensePolynomial::from_coefficients_vec(vec![ScalarField::zero()]),remainder); //Remainder should be 0 for valid polynomial
+    // assert_eq!(DensePolynomial::from_coefficients_vec(vec![ScalarField::zero()]),remainder); //Remainder should be 0 for valid polynomial
 
     // Compute random deltal,deltar,deltao
     let mut rng = ark_std::test_rng();
@@ -283,7 +368,7 @@ fn main(){
     let gr_right_operand_poly_eval = proving_key[1].clone();
     let go_output_operand_poly_eval = proving_key[2].clone();
     let gl_alpha_left_operand_poly_eval = proving_key[3].clone();
-    let gr_alpha_right_operand_poly_eval = proving_key[4].clone();
+    // let gr_alpha_right_operand_poly_eval = proving_key[4].clone();
     let go_alpha_output_operand_poly_eval = proving_key[5].clone();
     let gl_beta_left_operand_poly_eval = proving_key[6].clone();
     let gr_beta_right_operand_poly_eval = proving_key[7].clone();
@@ -294,15 +379,16 @@ fn main(){
     let gr2_alpha_right_operand_poly_eval = proving_key[12].clone(); //G2
     let g2sk = proving_key[13].clone(); //G2
     
-
     let gl_t_eval: Projective<Config> = extract_g1_element(g_vanishing_eval[0]); //gl^t(s)
-    // let gr_t_eval: Projective<Config> = extract_g1_element(g_vanishing_eval[1]); //gr^t(s)
+    let gr_t_eval: Projective<Config> = extract_g1_element(g_vanishing_eval[1]); //gr^t(s)
     let gr2_t_eval = extract_g2_element(gr2_vanishing_eval[0]);//gr2^t(s) //G2
     let go_t_eval: Projective<Config> = extract_g1_element(g_vanishing_eval[2]); //go^t(s)
-
+    let gl_beta_t_eval = extract_g1_element(g_vanishing_eval[6]);
+    let gr_beta_t_eval = extract_g1_element(g_vanishing_eval[7]);
+    let go_beta_t_eval = extract_g1_element(g_vanishing_eval[8]);
 
     let gl_t_eval_deltal = gl_t_eval.mul(delta_l); // gl^t(s)^deltal
-    // let gr_t_eval_deltar = gr_t_eval.mul(delta_r); // gr^t(s)^deltar
+    let gr_t_eval_deltar = gr_t_eval.mul(delta_r); // gr^t(s)^deltar
     let gr2_t_eval_deltar = gr2_t_eval.mul(delta_r);//gr2^t(s)^deltar //G2
     let go_t_eval_deltao = go_t_eval.mul(delta_o); // go^t(s)^deltao
 
@@ -328,12 +414,14 @@ fn main(){
     //Compute gl^L'p(s)
     let gl_lop_shifted_eval =  compute_encrypted_polynomial_evaluation(gl_alpha_left_operand_poly_eval.clone(),left_occurance_list.clone(),gl_alphal_t_eval_deltal,witness_values.clone());
 
-
     //Compute gr^RP(s)
-    let gr_rop_eval = compute_encrypted_polynomial_evaluation_g2(gr2_right_operand_poly_eval,right_occurance_list.clone(),gr2_t_eval_deltar,witness_values.clone());
+    let gr_rop_eval = compute_encrypted_polynomial_evaluation(gr_right_operand_poly_eval,right_occurance_list.clone(),gr_t_eval_deltar,witness_values.clone());
 
-    //Compute gr^R'p(s)
-    let gr_rop_shifted_eval =  compute_encrypted_polynomial_evaluation_g2(gr2_alpha_right_operand_poly_eval.clone(),right_occurance_list.clone(),gr2_alphar_t_eval_deltar,witness_values.clone());
+    //Compute gr2^RP(s)
+    let gr2_rop_eval = compute_encrypted_polynomial_evaluation_g2(gr2_right_operand_poly_eval,right_occurance_list.clone(),gr2_t_eval_deltar,witness_values.clone());
+
+    //Compute gr2^R'p(s)
+    let gr2_rop_shifted_eval =  compute_encrypted_polynomial_evaluation_g2(gr2_alpha_right_operand_poly_eval.clone(),right_occurance_list.clone(),gr2_alphar_t_eval_deltar,witness_values.clone());
 
     //Compute go^OP(s)
     let go_oop_eval = compute_encrypted_polynomial_evaluation(go_output_operand_poly_eval,output_occurance_list.clone(),go_t_eval_deltao,witness_values.clone());
@@ -343,38 +431,7 @@ fn main(){
 
     
     //Fetch values from verification key and test
-    let generator_g1 = extract_g1_element(verification_key[0][0].clone());
-    let generator_g2: Projective<Config2> = extract_g2_element(verification_key[5][0].clone());
-    let g_alphal_g2 = extract_g2_element(verification_key[5][1].clone());
-    // let g_alphar_g2 = extract_g2_element(verification_key[5][2].clone());
-    let g_alphar_g1 = extract_g1_element(verification_key[4][2].clone());
-    let go_t_eval = extract_g1_element(verification_key[4][0].clone());
-    let g_alphao_g2 = extract_g2_element(verification_key[5][3].clone());
-
-
-    //Pairing check
-    let left_part_pairing_l = Bn254::pairing(gl_lop_eval, g_alphal_g2);
-    let right_part_pairing_l = Bn254::pairing(gl_lop_shifted_eval, generator_g2);
-
-    let left_part_pairing_r = Bn254::pairing(g_alphar_g1,gr_rop_eval);
-    let right_part_pairing_r = Bn254::pairing(generator_g1,gr_rop_shifted_eval);
-
-    let left_part_pairing_o = Bn254::pairing(go_oop_eval, g_alphao_g2);
-    let right_part_pairing_o = Bn254::pairing(go_oop_shifted_eval, generator_g2);
-
-
-    assert_eq!(left_part_pairing_l,right_part_pairing_l);
-    assert_eq!(left_part_pairing_r,right_part_pairing_r);
-    assert_eq!(left_part_pairing_o,right_part_pairing_o);
-
-    //Asserting the same values G1 and G2 elements 
-    let g1_gen = G::generator();
-    let g2_gen = G2::generator();
-
-    let generator_l = Bn254::pairing(generator_g1,g2_gen);
-    let generator_r = Bn254::pairing(g1_gen,generator_g2);
-
-    assert_eq!(generator_l,generator_r);
+    let generator_g2: Projective<Config2> = G2::generator();
 
     //Compute g^h(s) and test 
     let h_coeffs:Vec<ScalarField> = polynomial_h.clone().coeffs; //Linearly stored 
@@ -389,13 +446,31 @@ fn main(){
         }
     }
 
-    // Pairing check for valid operation check  e(gl^Lp(s),gr^Rp(s)) === e(go^(t(s)),g^h(s)) * e(go^O(s),g)
-    let left_pairing_part = Bn254::pairing(gl_lop_eval, gr_rop_eval);
-    let right_pairing_part_1 = Bn254::pairing(go_t_eval, g2_h);
-    let right_pairing_part_2 = Bn254::pairing(go_oop_eval, generator_g2);
+    //Compute g^Z(s)
+    let z_1 = gl_beta_t_eval*delta_l + gr_beta_t_eval * delta_r + go_beta_t_eval * delta_o; 
+    
+    let gl_beta_leval_vi = compute_encrypted_beta_polynomial_evaluation(gl_beta_left_operand_poly_eval,left_occurance_list,witness_values.clone());
+    let gr_beta_reval_vi = compute_encrypted_beta_polynomial_evaluation(gr_beta_right_operand_poly_eval,right_occurance_list,witness_values.clone());
+    let go_beta_oeval_vi = compute_encrypted_beta_polynomial_evaluation(go_beta_output_operand_poly_eval,output_occurance_list,witness_values);
 
-    let right_pairing_part = right_pairing_part_1 + right_pairing_part_2;
+    let z_2 = gl_beta_leval_vi + gr_beta_reval_vi + go_beta_oeval_vi;
+    let g_z = z_1 + z_2; 
 
-    assert_eq!(left_pairing_part,right_pairing_part);
+    wishper("Generating proof !!");
+    //Combine proofs
+    let proof:Vec<ProjectiveConfigType> = vec![
+        ProjectiveConfigType::GOne(gl_lop_eval),
+        ProjectiveConfigType::GOne(gr_rop_eval),
+        ProjectiveConfigType::GOne(go_oop_eval),
+        ProjectiveConfigType::GOne(gl_lop_shifted_eval),
+        ProjectiveConfigType::GOne(go_oop_shifted_eval),
+        ProjectiveConfigType::GOne(g_z),
+        ProjectiveConfigType::GTwo(gr2_rop_eval),
+        ProjectiveConfigType::GTwo(gr2_rop_shifted_eval),
+        ProjectiveConfigType::GTwo(g2_h)
+    ];
+
+    let proof_string = generate_proof_string(proof);
+    println!("Proof: {}",proof_string);
 
 }
