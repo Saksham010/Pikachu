@@ -31,7 +31,7 @@ cargo run -- trusted-setup
 Two binary files *proving_key.bin* and *verification_key.bin* will be generated in the root directory
 
 ### Proof Generation
-Honest prover will valid constraint/circuit for computation in prover/prover_polynomial.pika file that matches to that of the agreed circuit during trusted setup. In prover/witness.json provide all the values for involved variable in the circuit and their computed values. Eg:
+Honest prover will provide valid constraint/circuit for computation in prover/prover_polynomial.pika file that matches to that of the agreed circuit during trusted setup. In prover/witness.json provide all the values for involved variable in the circuit and their computed values. Eg:
 
 ![Pikachu](assets/witness.png)
 
